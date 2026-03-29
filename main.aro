@@ -1,0 +1,47 @@
+(* ============================================================
+   ShowFiles (sf) - Midnight Commander-style Terminal File Manager
+   ============================================================ *)
+
+(Application-Start: ShowFiles) {
+    Clear the <screen> for the <terminal>.
+
+    (* List current directory *)
+    Create the <dir-path> with ".".
+    List the <entries> from the <directory: dir-path>.
+    Compute the <total-files: length> from the <entries>.
+    Compute the <total-all> from <total-files> + 1.
+
+    (* Store .. (parent) at idx 0 with fixed id so updates replace in-place *)
+    Create the <parent-item: FileItem> with { id: "fl-0", name: ".. (parent)", path: "..", isFile: false, marker: " ", idx: 0 }.
+    Store the <parent-item> into the <file-list-repository>.
+
+    (* Assign sequential idx to each file entry, starting at 1 *)
+    Create the <counter-one> with { key: "counter", val: 1 }.
+    Store the <counter-one> into the <counter-repository>.
+
+    for each <entry> in <entries> {
+        Create the <ctr-key> with "counter".
+        Retrieve the <ctr> from the <counter-repository> where <key> is <ctr-key>.
+        Extract the <current-idx> from the <ctr: val>.
+        Compute the <fl-id> from "fl-" ++ <current-idx>.
+        Create the <file-item: FileItem> with { id: <fl-id>, name: <entry: name>, path: <entry: path>, isFile: <entry: isFile>, marker: " ", idx: <current-idx> }.
+        Store the <file-item> into the <file-list-repository>.
+        Compute the <next-val> from <current-idx> + 1.
+        Update the <ctr: val> with <next-val>.
+        Store the <ctr> into the <counter-repository>.
+    }
+
+    (* Select first actual file at idx 1 *)
+    Create the <one-idx> with 1.
+    Retrieve the <first-file> from the <file-list-repository> where <idx> = <one-idx>.
+    Extract the <first-name> from the <first-file: name>.
+
+    (* Initial UI state: selection=1 skips the .. (parent) entry *)
+    Create the <init-state: UIState> with { key: "main", selection: 1, totalFiles: <total-all>, selectedName: <first-name>, prevName: <first-name>, previewScroll: 0, currentPath: "." }.
+    Store the <init-state> into the <ui-state-repository>.
+
+    Listen the <keyboard> to the <stdin>.
+    Keepalive the <application> for the <events>.
+
+    Return an <OK: status> for the <startup>.
+}

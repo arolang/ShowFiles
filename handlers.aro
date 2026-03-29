@@ -1,0 +1,153 @@
+(* ============================================================
+   handlers.aro - Keyboard event handlers for ShowFiles
+   up/down    → navigate file list, reset preview scroll
+   left/right → scroll preview panel independently
+   enter      → navigate into selected directory
+   ============================================================ *)
+
+(Move Down: KeyPress Handler) where <key> = "down" {
+    Create the <state-key> with "main".
+    Retrieve the <state> from the <ui-state-repository> where <key> is <state-key>.
+    Extract the <cur-name> from the <state: selectedName>.
+
+    Compute the <raw-sel> from (<state: selection>) + 1.
+    Compute the <new-sel> from <raw-sel> % <state: totalFiles>.
+
+    Retrieve the <next-file> from the <file-list-repository> where <idx> = <new-sel>.
+
+    Update the <state: selection> with <new-sel>.
+    Update the <state: selectedName> with <next-file: name>.
+    Update the <state: prevName> with <cur-name>.
+    Update the <state: previewScroll> with 0.
+    Store the <state> into the <ui-state-repository>.
+
+    Return an <OK: status> for the <key-handled>.
+}
+
+(Move Up: KeyPress Handler) where <key> = "up" {
+    Create the <state-key> with "main".
+    Retrieve the <state> from the <ui-state-repository> where <key> is <state-key>.
+    Extract the <cur-name> from the <state: selectedName>.
+
+    Compute the <total-plus-prev> from (<state: totalFiles>) + <state: selection> - 1.
+    Compute the <new-sel> from <total-plus-prev> % <state: totalFiles>.
+
+    Retrieve the <prev-file> from the <file-list-repository> where <idx> = <new-sel>.
+
+    Update the <state: selection> with <new-sel>.
+    Update the <state: selectedName> with <prev-file: name>.
+    Update the <state: prevName> with <cur-name>.
+    Update the <state: previewScroll> with 0.
+    Store the <state> into the <ui-state-repository>.
+
+    Return an <OK: status> for the <key-handled>.
+}
+
+(Scroll Right: KeyPress Handler) where <key> = "right" {
+    (* Scroll preview panel forward by 1 line *)
+    Create the <state-key> with "main".
+    Retrieve the <state> from the <ui-state-repository> where <key> is <state-key>.
+    Compute the <new-ps> from (<state: previewScroll>) + 1.
+    Update the <state: previewScroll> with <new-ps>.
+    Store the <state> into the <ui-state-repository>.
+
+    Return an <OK: status> for the <key-handled>.
+}
+
+(Scroll Left: KeyPress Handler) where <key> = "left" {
+    (* Scroll preview panel back by 1 line, floor at 0 *)
+    Create the <state-key> with "main".
+    Retrieve the <state> from the <ui-state-repository> where <key> is <state-key>.
+    Compute the <raw-ps> from (<state: previewScroll>) - 1.
+    Compute the <can-scroll-up> from <raw-ps> >= 0.
+    match <can-scroll-up> {
+        case true {
+            Update the <state: previewScroll> with <raw-ps>.
+        }
+        case false {
+            Update the <state: previewScroll> with 0.
+        }
+    }
+    Store the <state> into the <ui-state-repository>.
+
+    Return an <OK: status> for the <key-handled>.
+}
+
+(Open Directory: KeyPress Handler) where <key> = "enter" {
+    Create the <state-key> with "main".
+    Retrieve the <state> from the <ui-state-repository> where <key> is <state-key>.
+    Extract the <cur-sel> from the <state: selection>.
+
+    Retrieve the <sel-entry> from the <file-list-repository> where <idx> = <cur-sel>.
+    Extract the <sel-name> from the <sel-entry: name>.
+    Extract the <entry-kind> from the <sel-entry: isFile>.
+
+    match <entry-kind> {
+        case false {
+            (* Navigate into directory or up to parent *)
+            Compute the <going-up> from <cur-sel> == 0.
+            match <going-up> {
+                case true {
+                    Compute the <new-path> from (<state: currentPath>) ++ "/..".
+                }
+                case false {
+                    Compute the <new-path> from (<state: currentPath>) ++ "/" ++ <sel-name>.
+                }
+            }
+
+            (* List new directory and rebuild file-list-repository *)
+            List the <new-entries> from the <directory: new-path>.
+            Compute the <new-raw-count: length> from <new-entries>.
+            Compute the <new-total> from <new-raw-count> + 1.
+
+            (* Store .. at idx 0 with fixed id so it updates in-place *)
+            Create the <parent-entry: FileItem> with { id: "fl-0", name: ".. (parent)", path: "..", isFile: false, marker: " ", idx: 0 }.
+            Store the <parent-entry> into the <file-list-repository>.
+
+            (* Store new entries at idx 1..N with fixed ids *)
+            Create the <nav-ctr-init> with { key: "navctr", val: 1 }.
+            Store the <nav-ctr-init> into the <nav-ctr-repository>.
+
+            for each <new-entry> in <new-entries> {
+                Create the <nav-ctr-key> with "navctr".
+                Retrieve the <nav-ctr> from the <nav-ctr-repository> where <key> is <nav-ctr-key>.
+                Extract the <nav-idx> from the <nav-ctr: val>.
+                Compute the <fl-nav-id> from "fl-" ++ <nav-idx>.
+                Create the <nav-item: FileItem> with { id: <fl-nav-id>, name: <new-entry: name>, path: <new-entry: path>, isFile: <new-entry: isFile>, marker: " ", idx: <nav-idx> }.
+                Store the <nav-item> into the <file-list-repository>.
+                Compute the <next-nav-idx> from <nav-idx> + 1.
+                Update the <nav-ctr: val> with <next-nav-idx>.
+                Store the <nav-ctr> into the <nav-ctr-repository>.
+            }
+
+            (* Select first actual file at idx 1, or .. if directory is empty *)
+            Compute the <has-files> from <new-raw-count> > 0.
+            match <has-files> {
+                case true {
+                    Create the <first-new-idx> with 1.
+                    Retrieve the <first-new-file> from the <file-list-repository> where <idx> = <first-new-idx>.
+                    Extract the <first-new-name> from the <first-new-file: name>.
+                    Update the <state: selection> with 1.
+                    Update the <state: selectedName> with <first-new-name>.
+                }
+                case false {
+                    Update the <state: selection> with 0.
+                    Update the <state: selectedName> with ".. (parent)".
+                }
+            }
+
+            Update the <state: prevName> with <sel-name>.
+            Update the <state: currentPath> with <new-path>.
+            Update the <state: totalFiles> with <new-total>.
+            Update the <state: previewScroll> with 0.
+            Store the <state> into the <ui-state-repository>.
+        }
+    }
+
+    Return an <OK: status> for the <key-handled>.
+}
+
+(Quit: KeyPress Handler) where <key> = "q" or "escape" {
+    Stop the <keyboard> with <application>.
+    Return an <OK: status> for the <key-handled>.
+}

@@ -1,0 +1,59 @@
+openapi: 3.0.3
+info:
+  title: ShowFiles
+  version: 1.0.0
+  description: Terminal file manager — schema definitions for state and file objects
+
+# No HTTP paths — event-driven application
+paths: {}
+
+components:
+  schemas:
+
+    UIState:
+      type: object
+      description: Application UI state stored in ui-state-repository
+      required: [key, selection, totalFiles, selectedName, prevName, previewScroll, currentPath]
+      properties:
+        key:
+          type: string
+          description: Repository key (always "main")
+        selection:
+          type: integer
+          description: Zero-based index of the currently selected file
+        totalFiles:
+          type: integer
+          description: Total number of entries in the current directory
+        selectedName:
+          type: string
+          description: Name of the currently selected file
+        prevName:
+          type: string
+          description: Name of the previously selected file (for marker reset)
+        previewScroll:
+          type: integer
+          description: Preview panel vertical scroll offset in lines
+        currentPath:
+          type: string
+          description: Current directory path being browsed
+
+    FileItem:
+      type: object
+      description: A directory entry stored in file-list-repository
+      required: [name, path, isFile, marker, idx]
+      properties:
+        name:
+          type: string
+          description: File or directory name
+        path:
+          type: string
+          description: Full path
+        isFile:
+          type: boolean
+          description: True for files, false for directories
+        marker:
+          type: string
+          description: Selection marker (" " or "▶")
+        idx:
+          type: integer
+          description: Sequential index for idx-based retrieval

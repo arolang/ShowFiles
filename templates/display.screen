@@ -1,0 +1,8 @@
+{{
+    Compute the <ls> from <left-w> - 9.
+    Compute the <rs> from <right-w> - 11.
+    Compute the <lsep> from "─" * <ls>.
+    Compute the <rsep> from "─" * <rs>.
+}} ShowFiles  ▶ {{ <state: selectedName> | bold }}  [{{ <state: selection> }}/{{ <state: totalFiles> }}]  +{{ <state: previewScroll> }}  ↑↓ ←→prev q esc
+── Files {{ <lsep> }}┬── Preview {{ <rsep> }}
+{{ <display-body> }}── {{ <size-label> }}  {{ <mod-short> }}  {{ <owner-val> }}  {{ <perms-val> }}

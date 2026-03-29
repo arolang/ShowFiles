@@ -1,0 +1,347 @@
+name: Build & Release
+
+on:
+  push:
+    branches: [main]
+    tags: ['*']
+  pull_request:
+    branches: [main]
+
+env:
+  ARO_VERSION: latest
+  SWIFT_VERSION: '6.2.1'
+
+jobs:
+  # ===========================================================================
+  # Check — syntax-check on both platforms
+  # ===========================================================================
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            asset: aro-linux-amd64.tar.gz
+          - os: macos-latest
+            asset: aro-macos-arm64.tar.gz
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libgit2-dev
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo gpg --dearmor -o /usr/share/keyrings/llvm-archive-keyring.gpg
+          echo "deb [signed-by=/usr/share/keyrings/llvm-archive-keyring.gpg] http://apt.llvm.org/jammy/ llvm-toolchain-jammy-20 main" | sudo tee /etc/apt/sources.list.d/llvm.list
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libllvm20
+
+      - name: Install ARO (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          if [ "$ARO_VERSION" = "latest" ]; then
+            DOWNLOAD_URL=$(curl -s https://api.github.com/repos/arolang/aro/releases/latest \
+              | grep "browser_download_url.*${{ matrix.asset }}" \
+              | cut -d '"' -f 4)
+          else
+            DOWNLOAD_URL="https://github.com/arolang/aro/releases/download/${ARO_VERSION}/${{ matrix.asset }}"
+          fi
+          curl -fsSL "$DOWNLOAD_URL" | tar xz
+          sudo mv aro /usr/local/bin/
+          sudo mv libARORuntime.a /usr/local/lib/
+          aro --version
+
+      - name: Install ARO (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew tap arolang/aro
+          brew install aro libgit2 llvm@20
+          aro --version
+
+      - name: Check code
+        run: aro check .
+
+  # ===========================================================================
+  # Build — compile for macOS (signed) and Linux
+  # ===========================================================================
+  build-linux:
+    needs: check
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Swift
+        run: |
+          curl -fsSL "https://download.swift.org/swift-${SWIFT_VERSION}-release/ubuntu2204/swift-${SWIFT_VERSION}-RELEASE/swift-${SWIFT_VERSION}-RELEASE-ubuntu22.04.tar.gz" -o swift.tar.gz
+          sudo mkdir -p /usr/share/swift
+          sudo tar xzf swift.tar.gz -C /usr/share/swift --strip-components=1
+          echo "/usr/share/swift/usr/bin" >> $GITHUB_PATH
+          rm swift.tar.gz
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libgit2-dev
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo gpg --dearmor -o /usr/share/keyrings/llvm-archive-keyring.gpg
+          echo "deb [signed-by=/usr/share/keyrings/llvm-archive-keyring.gpg] http://apt.llvm.org/jammy/ llvm-toolchain-jammy-20 main" | sudo tee /etc/apt/sources.list.d/llvm.list
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq llvm-20
+          sudo ln -sf /usr/lib/llvm-20/bin/llc /usr/local/bin/llc
+          sudo ln -sf /usr/lib/llvm-20/bin/clang /usr/local/bin/clang
+
+      - name: Install ARO
+        run: |
+          if [ "$ARO_VERSION" = "latest" ]; then
+            DOWNLOAD_URL=$(curl -s https://api.github.com/repos/arolang/aro/releases/latest \
+              | grep "browser_download_url.*aro-linux-amd64.tar.gz" \
+              | cut -d '"' -f 4)
+          else
+            DOWNLOAD_URL="https://github.com/arolang/aro/releases/download/${ARO_VERSION}/aro-linux-amd64.tar.gz"
+          fi
+          curl -fsSL "$DOWNLOAD_URL" | tar xz
+          sudo mv aro /usr/local/bin/
+          sudo mv libARORuntime.a /usr/local/lib/
+
+      - name: Build
+        run: aro build . --optimize --strip --size -o sf
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sf-linux-amd64
+          path: sf
+
+  build-macos:
+    needs: check
+    runs-on: macos-latest
+    env:
+      APPLE_CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Swift
+        run: |
+          curl -fsSL "https://download.swift.org/swift-${SWIFT_VERSION}-release/xcode/swift-${SWIFT_VERSION}-RELEASE/swift-${SWIFT_VERSION}-RELEASE-osx.pkg" -o swift.pkg
+          sudo installer -pkg swift.pkg -target /
+          TOOLCHAIN_BIN="/Library/Developer/Toolchains/swift-${SWIFT_VERSION}-RELEASE.xctoolchain/usr/bin"
+          echo "$TOOLCHAIN_BIN" >> $GITHUB_PATH
+          rm swift.pkg
+
+      - name: Install ARO
+        run: |
+          brew tap arolang/aro
+          brew install aro libgit2 llvm@20
+          echo "/opt/homebrew/opt/llvm@20/bin" >> $GITHUB_PATH
+
+      - name: Import Code Signing Certificate
+        if: github.ref_type == 'tag' && env.APPLE_CERTIFICATE_BASE64 != ''
+        env:
+          APPLE_CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+          KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
+
+          echo "$APPLE_CERTIFICATE_BASE64" | base64 --decode > certificate.p12
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+          security set-keychain-settings -lut 21600 $KEYCHAIN_PATH
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+
+          security import certificate.p12 \
+            -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -A \
+            -t cert \
+            -f pkcs12 \
+            -k $KEYCHAIN_PATH
+
+          security list-keychain -d user -s $KEYCHAIN_PATH
+          security set-key-partition-list \
+            -S apple-tool:,apple: \
+            -s \
+            -k "$KEYCHAIN_PASSWORD" \
+            $KEYCHAIN_PATH
+
+          rm certificate.p12
+
+      - name: Build (signed)
+        if: github.ref_type == 'tag' && env.APPLE_TEAM_ID != ''
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          aro build . --sign "$APPLE_TEAM_ID" --optimize --strip --size -o sf
+          codesign --verify --verbose sf
+
+      - name: Build (unsigned)
+        if: github.ref_type != 'tag' || env.APPLE_TEAM_ID == ''
+        run: aro build . --optimize --strip --size -o sf
+
+      - name: Notarize Binary
+        if: github.ref_type == 'tag' && env.APPLE_ID != ''
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: |
+          zip -r sf.zip sf
+          xcrun notarytool submit sf.zip \
+            --apple-id "$APPLE_ID" \
+            --team-id "$APPLE_TEAM_ID" \
+            --password "$APPLE_APP_PASSWORD" \
+            --wait
+          # Staple may fail for CLI tools — that's OK
+          xcrun stapler staple sf || true
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sf-macos-arm64
+          path: sf
+
+  # ===========================================================================
+  # Release — create GitHub release on tag push
+  # ===========================================================================
+  release:
+    name: Create Release
+    needs: [build-linux, build-macos]
+    runs-on: ubuntu-latest
+    if: github.ref_type == 'tag'
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Package release assets
+        run: |
+          cd artifacts/sf-linux-amd64
+          chmod +x sf
+          tar -czvf ../sf-linux-amd64.tar.gz sf
+          cd ../..
+
+          cd artifacts/sf-macos-arm64
+          chmod +x sf
+          tar -czvf ../sf-macos-arm64.tar.gz sf
+          cd ../..
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          VERSION="${{ github.ref_name }}"
+          VERSION="${VERSION#v}"
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: sf ${{ steps.version.outputs.version }}
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          generate_release_notes: true
+          files: |
+            artifacts/sf-linux-amd64.tar.gz
+            artifacts/sf-macos-arm64.tar.gz
+          body: |
+            ## ShowFiles ${{ steps.version.outputs.version }}
+
+            A Midnight Commander-style terminal file manager written in ARO.
+
+            ### Downloads
+
+            | Platform | Architecture | Download |
+            |----------|--------------|----------|
+            | macOS | Apple Silicon | [sf-macos-arm64.tar.gz](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/sf-macos-arm64.tar.gz) |
+            | Linux | x86_64 | [sf-linux-amd64.tar.gz](https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/sf-linux-amd64.tar.gz) |
+
+            ### Installation
+
+            **macOS (Homebrew)**
+            ```bash
+            brew tap arolang/applications
+            brew install arolang/applications/sf
+            ```
+
+            **macOS (Manual)**
+            ```bash
+            curl -fsSL https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/sf-macos-arm64.tar.gz | tar xz
+            sudo mv sf /usr/local/bin/
+            ```
+
+            **Linux**
+            ```bash
+            curl -fsSL https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/sf-linux-amd64.tar.gz | tar xz
+            sudo mv sf /usr/local/bin/
+            ```
+
+      # ======================================================================
+      # Update Homebrew Formula
+      # ======================================================================
+      - name: Update Homebrew Formula
+        continue-on-error: true
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          SHA256_MACOS=$(shasum -a 256 artifacts/sf-macos-arm64.tar.gz | awk '{print $1}')
+          SHA256_LINUX=$(shasum -a 256 artifacts/sf-linux-amd64.tar.gz | awk '{print $1}')
+          VERSION="${{ steps.version.outputs.version }}"
+          REPO="${{ github.repository }}"
+          TAG="${{ github.ref_name }}"
+
+          echo "Version: $VERSION"
+          echo "SHA256 macOS: $SHA256_MACOS"
+          echo "SHA256 Linux: $SHA256_LINUX"
+
+          git clone https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/arolang/homebrew-applications.git
+          cd homebrew-applications
+          mkdir -p Formula
+
+          {
+            echo 'class Sf < Formula'
+            echo '  desc "Midnight Commander-style terminal file manager written in ARO"'
+            echo "  homepage \"https://github.com/${REPO}\""
+            echo "  version \"${VERSION}\""
+            echo '  license "MIT"'
+            echo ''
+            echo '  on_macos do'
+            echo '    depends_on arch: :arm64'
+            echo "    url \"https://github.com/${REPO}/releases/download/${TAG}/sf-macos-arm64.tar.gz\""
+            echo "    sha256 \"${SHA256_MACOS}\""
+            echo '  end'
+            echo ''
+            echo '  on_linux do'
+            echo "    url \"https://github.com/${REPO}/releases/download/${TAG}/sf-linux-amd64.tar.gz\""
+            echo "    sha256 \"${SHA256_LINUX}\""
+            echo '  end'
+            echo ''
+            echo '  def install'
+            echo '    bin.install "sf"'
+            echo '  end'
+            echo ''
+            echo '  test do'
+            echo '    assert_match version.to_s, shell_output("#{bin}/sf --version")'
+            echo '  end'
+            echo 'end'
+          } > Formula/sf.rb
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add Formula/sf.rb
+          if git diff --staged --quiet; then
+            echo "No changes to formula"
+          else
+            git commit -m "chore: update sf to version ${VERSION}"
+            git push https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/arolang/homebrew-applications.git main
+          fi

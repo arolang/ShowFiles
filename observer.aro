@@ -1,0 +1,203 @@
+(* ============================================================
+   observer.aro - Repository observer for ShowFiles
+   Left (1/3):  file list  — iterates file-list-repository by idx
+   Right (2/3): preview    — preview[previewScroll + ridx]
+   Bottom:      stats bar  — size, modified, owner, permissions
+   panel-height = term-rows - 3  (header + separator + stats bar)
+   ============================================================ *)
+
+(Render Display: ui-state-repository Observer) {
+    Extract the <state: UIState> from the <event: newValue>.
+
+    (* Terminal dimensions — reserve 3 rows: header + separator + stats bar *)
+    Extract the <term-rows> from the <terminal: rows>.
+    Compute the <panel-height> from <term-rows> - 3.
+    Extract the <term-cols> from the <terminal: columns>.
+    Compute the <left-w> from <term-cols> / 3.
+    Compute the <right-w> from <term-cols> - <left-w> - 1.
+
+    (* Get selected file by idx — fixed ids ensure exactly one record per idx *)
+    Extract the <cur-sel> from the <state: selection>.
+    Retrieve the <cur-file> from the <file-list-repository> where <idx> = <cur-sel>.
+    Extract the <sel-path> from the <cur-file: path>.
+    Extract the <sel-kind> from the <cur-file: isFile>.
+
+    match <sel-kind> {
+        case true {
+            Read the <str-content: string> from the <file: sel-path>.
+        }
+        case false {
+            Create the <str-content> with "(directory)".
+        }
+    }
+
+    (* Index clipped preview lines *)
+    Split the <preview-lines> from the <str-content> by /\n/.
+    Compute the <preview-count: length> from <preview-lines>.
+
+    Create the <pl-ctr-init> with { key: "plctr", val: 0 }.
+    Store the <pl-ctr-init> into the <pl-ctr-repository>.
+
+    for each <pline> in <preview-lines> {
+        Create the <pl-key> with "plctr".
+        Retrieve the <plc> from the <pl-ctr-repository> where <key> is <pl-key>.
+        Extract the <pl-idx> from the <plc: val>.
+        Compute the <pline-clipped: clip> from <pline> with <right-w>.
+        Create the <pentry> with { key: <pl-idx>, line: <pline-clipped> }.
+        Store the <pentry> into the <preview-repository>.
+        Compute the <next-pl-idx> from <pl-idx> + 1.
+        Update the <plc: val> with <next-pl-idx>.
+        Store the <plc> into the <pl-ctr-repository>.
+    }
+
+    (* Accumulator + row counter *)
+    Create the <row-acc-init> with { key: "racc", content: "" }.
+    Store the <row-acc-init> into the <row-acc-repository>.
+
+    Create the <row-ctr-init> with { key: "rctr", val: 0 }.
+    Store the <row-ctr-init> into the <row-ctr-repository>.
+
+    (* Loop 1: one row per file-list-repository entry (idx 0 = "..", idx 1..N = files) *)
+    Compute the <file-loop-count> from (<state: totalFiles>) - 1.
+    Compute the <file-loop-str> from "x" * <file-loop-count>.
+    Split the <file-loop-items> from <file-loop-str> by /x/.
+
+    for each <fl-item> in <file-loop-items> {
+        Create the <rctr-key> with "rctr".
+        Retrieve the <rctr> from the <row-ctr-repository> where <key> is <rctr-key>.
+        Extract the <ridx> from the <rctr: val>.
+
+        Retrieve the <fentry> from the <file-list-repository> where <idx> = <ridx>.
+        Extract the <dname> from the <fentry: name>.
+        Compute the <row-active> from <ridx> == <cur-sel>.
+        match <row-active> {
+            case true { Create the <fmarker> with "▶". }
+            case false { Create the <fmarker> with " ". }
+        }
+
+        Compute the <preview-ridx> from (<state: previewScroll>) + <ridx>.
+        Compute the <has-preview> from <preview-ridx> < <preview-count>.
+        match <has-preview> {
+            case true {
+                Retrieve the <prow> from the <preview-repository> where <key> = <preview-ridx>.
+                Extract the <ptext> from the <prow: line>.
+            }
+            case false {
+                Create the <ptext> with "".
+            }
+        }
+
+        Compute the <flen: length> from <dname>.
+        Compute the <raw-sp> from <left-w> - <flen> - 3.
+        Compute the <pad-pos> from <raw-sp> > 0.
+        match <pad-pos> {
+            case true {
+                Compute the <padding> from " " * <raw-sp>.
+            }
+            case false {
+                Create the <padding> with "".
+            }
+        }
+
+        Compute the <left-col> from " " ++ <fmarker> ++ " " ++ <dname> ++ <padding>.
+        Compute the <row-line> from <left-col> ++ "│ " ++ <ptext> ++ "\n".
+
+        Create the <racc-key> with "racc".
+        Retrieve the <racc> from the <row-acc-repository> where <key> is <racc-key>.
+        Extract the <racc-content> from the <racc: content>.
+        Compute the <new-content> from <racc-content> ++ <row-line>.
+        Update the <racc: content> with <new-content>.
+        Store the <racc> into the <row-acc-repository>.
+
+        Compute the <next-ridx> from <ridx> + 1.
+        Update the <rctr: val> with <next-ridx>.
+        Store the <rctr> into the <row-ctr-repository>.
+    }
+
+    (* Loop 2: pad remaining rows to fill panel height *)
+    Compute the <remaining-rows> from <panel-height> - <state: totalFiles>.
+    Compute the <needs-padding> from <remaining-rows> > 0.
+    match <needs-padding> {
+        case true {
+            Compute the <filler-count> from <remaining-rows> - 1.
+            Compute the <filler-str> from "x" * <filler-count>.
+            Split the <filler-list> from <filler-str> by /x/.
+            Compute the <blank-left-pad> from " " * <left-w>.
+
+            for each <filler-item> in <filler-list> {
+                Create the <rctr-pad-key> with "rctr".
+                Retrieve the <rctr-pad> from the <row-ctr-repository> where <key> is <rctr-pad-key>.
+                Extract the <ridx-pad> from the <rctr-pad: val>.
+
+                Compute the <preview-ridx-pad> from (<state: previewScroll>) + <ridx-pad>.
+                Compute the <has-prev-pad> from <preview-ridx-pad> < <preview-count>.
+                match <has-prev-pad> {
+                    case true {
+                        Retrieve the <prow-pad> from the <preview-repository> where <key> = <preview-ridx-pad>.
+                        Extract the <ptext-pad> from the <prow-pad: line>.
+                    }
+                    case false {
+                        Create the <ptext-pad> with "".
+                    }
+                }
+
+                Compute the <pad-row-line> from <blank-left-pad> ++ "│ " ++ <ptext-pad> ++ "\n".
+
+                Create the <racc-pad-key> with "racc".
+                Retrieve the <racc-pad> from the <row-acc-repository> where <key> is <racc-pad-key>.
+                Extract the <racc-pad-content> from the <racc-pad: content>.
+                Compute the <new-pad-content> from <racc-pad-content> ++ <pad-row-line>.
+                Update the <racc-pad: content> with <new-pad-content>.
+                Store the <racc-pad> into the <row-acc-repository>.
+
+                Compute the <next-ridx-pad> from <ridx-pad> + 1.
+                Update the <rctr-pad: val> with <next-ridx-pad>.
+                Store the <rctr-pad> into the <row-ctr-repository>.
+            }
+        }
+    }
+
+    Create the <racc-final-key> with "racc".
+    Retrieve the <final-racc> from the <row-acc-repository> where <key> is <racc-final-key>.
+    Extract the <display-body> from the <final-racc: content>.
+
+    (* File stats for the bottom bar *)
+    Stat the <file-stats> for the <file: sel-path>.
+
+    match <sel-kind> {
+        case true {
+            Extract the <raw-size> from the <file-stats: size>.
+            Compute the <size-kb> from <raw-size> / 1024.
+            Compute the <size-mb> from <size-kb> / 1024.
+            Compute the <under-kb> from <raw-size> < 1024.
+            Compute the <under-mb> from <size-kb> < 1024.
+            match <under-kb> {
+                case true {
+                    Compute the <size-label> from <raw-size> ++ " B".
+                }
+                case false {
+                    match <under-mb> {
+                        case true {
+                            Compute the <size-label> from <size-kb> ++ " KB".
+                        }
+                        case false {
+                            Compute the <size-label> from <size-mb> ++ " MB".
+                        }
+                    }
+                }
+            }
+        }
+        case false {
+            Create the <size-label> with "—".
+        }
+    }
+
+    Compute the <mod-short: clip> from <file-stats: modified> with 16.
+    Extract the <owner-val> from the <file-stats: owner>.
+    Extract the <perms-val> from the <file-stats: permissions>.
+
+    Transform the <display> from the <template: display.screen>.
+    Render the <display> to the <console>.
+
+    Return an <OK: status> for the <render>.
+}
