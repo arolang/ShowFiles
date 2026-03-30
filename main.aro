@@ -43,5 +43,9 @@
     Listen the <keyboard> to the <stdin>.
     Keepalive the <application> for the <events>.
 
-    Return an <OK: status> for the <startup>.
+    Return an <OK: status> for the <success>.
+}
+
+(Application-End: Success) {
+    Clear the <screen> for the <terminal>.
 }
