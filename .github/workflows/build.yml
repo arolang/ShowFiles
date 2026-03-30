@@ -286,9 +286,9 @@ jobs:
             ```
 
       # ======================================================================
-      # Update Homebrew Formula
+      # Trigger Homebrew Formula Update
       # ======================================================================
-      - name: Update Homebrew Formula
+      - name: Trigger Homebrew Formula Update
         continue-on-error: true
         env:
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
@@ -296,52 +296,23 @@ jobs:
           SHA256_MACOS=$(shasum -a 256 artifacts/sf-macos-arm64.tar.gz | awk '{print $1}')
           SHA256_LINUX=$(shasum -a 256 artifacts/sf-linux-amd64.tar.gz | awk '{print $1}')
           VERSION="${{ steps.version.outputs.version }}"
-          REPO="${{ github.repository }}"
-          TAG="${{ github.ref_name }}"
 
-          echo "Version: $VERSION"
+          echo "Triggering homebrew formula update for sf ${VERSION}"
           echo "SHA256 macOS: $SHA256_MACOS"
           echo "SHA256 Linux: $SHA256_LINUX"
 
-          git clone https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/arolang/homebrew-applications.git
-          cd homebrew-applications
-          mkdir -p Formula
-
-          {
-            echo 'class Sf < Formula'
-            echo '  desc "Midnight Commander-style terminal file manager written in ARO"'
-            echo "  homepage \"https://github.com/${REPO}\""
-            echo "  version \"${VERSION}\""
-            echo '  license "MIT"'
-            echo ''
-            echo '  on_macos do'
-            echo '    depends_on arch: :arm64'
-            echo "    url \"https://github.com/${REPO}/releases/download/${TAG}/sf-macos-arm64.tar.gz\""
-            echo "    sha256 \"${SHA256_MACOS}\""
-            echo '  end'
-            echo ''
-            echo '  on_linux do'
-            echo "    url \"https://github.com/${REPO}/releases/download/${TAG}/sf-linux-amd64.tar.gz\""
-            echo "    sha256 \"${SHA256_LINUX}\""
-            echo '  end'
-            echo ''
-            echo '  def install'
-            echo '    bin.install "sf"'
-            echo '  end'
-            echo ''
-            echo '  test do'
-            echo '    assert_match version.to_s, shell_output("#{bin}/sf --version")'
-            echo '  end'
-            echo 'end'
-          } > Formula/sf.rb
-
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
-          git add Formula/sf.rb
-          if git diff --staged --quiet; then
-            echo "No changes to formula"
-          else
-            git commit -m "chore: update sf to version ${VERSION}"
-            git push https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/arolang/homebrew-applications.git main
-          fi
+          curl -fsSL -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${HOMEBREW_TAP_TOKEN}" \
+            https://api.github.com/repos/arolang/homebrew-applications/dispatches \
+            -d "{
+              \"event_type\": \"update-formula\",
+              \"client_payload\": {
+                \"formula\": \"sf\",
+                \"version\": \"${VERSION}\",
+                \"tag\": \"${{ github.ref_name }}\",
+                \"repo\": \"${{ github.repository }}\",
+                \"sha256_macos\": \"${SHA256_MACOS}\",
+                \"sha256_linux\": \"${SHA256_LINUX}\"
+              }
+            }"
